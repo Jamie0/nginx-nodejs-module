@@ -1,0 +1,44 @@
+ngx_addon_name=ngx_http_nodejs_module
+
+nodejs_flags="-std=c++17"
+
+nodejs_libs="-L${ngx_addon_dir}/ext/node-v18.16.1/out/Release -lstdc++ $nodejs_flags -lv8_base_without_compiler -lv8_compiler -lv8_snapshot -lv8_libplatform -lv8_libbase -lv8_base_without_compiler -lv8_zlib -lv8_init -lv8_initializers -lpthread -lz -lzlib -lnode.108"
+
+nodejs_include="\
+    $ngx_addon_dir/ext/node-v18.16.1/deps/uv/include \
+    $ngx_addon_dir/ext/node-v18.16.1/deps/v8/include \
+    $ngx_addon_dir/ext/node-v18.16.1/src"
+
+ngx_feature="node"
+ngx_feature_run=no
+ngx_feature_path="$nodejs_include"
+ngx_feature_libs="$nodejs_libs"
+ngx_feature_incs="
+#include <node.h>
+#include <node_api.h>
+#include <cstring>
+"
+ngx_feature_test="
+	std::unique_ptr<node::MultiIsolatePlatform> platform =
+		node::MultiIsolatePlatform::Create(4);
+	v8::V8::InitializePlatform(platform.get());
+"
+
+. "$ngx_addon_dir/cpp_feature"
+
+ngx_module_type=HTTP
+ngx_module_name=$ngx_addon_name
+ngx_module_incs="$nodejs_include"
+ngx_module_deps=""
+ngx_module_srcs=" $ngx_addon_dir/ngx_http_nodejs_module.cpp "
+ngx_module_libs="$nodejs_libs"
+
+ngx_modext=".dylib"
+
+. auto/module
+
+NODE_NGX_SRCS="$ngx_module_srcs"
+
+CXXFLAGS="$CXXFLAGS $nodejs_flags"
+
+# HTTP_MODULES="$HTTP_MODULES ngx_http_nodejs_module"
