@@ -2,7 +2,7 @@ ngx_addon_name=ngx_http_nodejs_module
 
 nodejs_flags="-std=c++17"
 
-nodejs_libs="-L${ngx_addon_dir}/ext/node-v18.16.1/out/Release -lstdc++ $nodejs_flags -lv8_base_without_compiler -lv8_compiler -lv8_snapshot -lv8_libplatform -lv8_libbase -lv8_base_without_compiler -lv8_zlib -lv8_init -lv8_initializers -lpthread -lz -lzlib -lnode.108"
+nodejs_libs="-L${ngx_addon_dir}/ext/node-v18.16.1/out/Release -lstdc++ $nodejs_flags -lpthread -lz -lzlib -lnode.108"
 
 nodejs_include="\
     $ngx_addon_dir/ext/node-v18.16.1/deps/uv/include \
