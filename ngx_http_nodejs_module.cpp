@@ -18,9 +18,30 @@ extern "C" {
 
 #define NGX_CONF_BUFFER 4096
 
-static char *ngx_http_nodejs(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char ngx_http_nodejs_middleware_start[] = 
+	// "require('') \n"
+	"function fetch (req) { \n"
+	"	let res = {};\n"
+	"	res.data = (function (req, res) {\n";
+
+static char ngx_http_nodejs_middleware_end[] = 
+	"	})(req, res);\n"
+	"	return res.data;\n"
+	"}; fetch";
+
+static char* ngx_http_nodejs(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static ngx_int_t ngx_http_nodejs_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_nodejs_init (ngx_cycle_t *cycle);
+
+typedef struct ngx_http_nodejs_loc_conf_s {
+	ngx_flag_t require;
+
+	ngx_str_t * code;
+	v8::Global<v8::Script> script;
+	v8::Isolate * isolate;
+	v8::Global<v8::Context> context;
+	v8::Global<v8::Value> function;
+} ngx_http_nodejs_loc_conf_t;
 
 static ngx_command_t ngx_http_nodejs_commands[] = {
 
@@ -30,6 +51,14 @@ static ngx_command_t ngx_http_nodejs_commands[] = {
 	  ngx_http_nodejs, /* configuration setup function */
 	  0, /* No offset. Only one context is supported. */
 	  0, /* No offset when storing the module configuration on struct. */
+	  NULL},
+
+	{ ngx_string("nodejs_allow_require"),
+	  NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+
+	  ngx_conf_set_flag_slot,
+	  NGX_HTTP_LOC_CONF_OFFSET,
+	  offsetof(ngx_http_nodejs_loc_conf_t, require),
 	  NULL},
 
 	ngx_null_command /* command termination */
@@ -69,17 +98,11 @@ ngx_module_t ngx_http_nodejs_module = {
 	NGX_MODULE_V1_PADDING
 };
 
-typedef struct ngx_http_nodejs_loc_conf_s {
-	ngx_str_t * code;
-	v8::Global<v8::Script> script;
-	v8::Isolate * isolate;
-	v8::Global<v8::Context> context;
-} ngx_http_nodejs_loc_conf_t;
 
 }
 
 static void *start_nodejs (ngx_http_nodejs_loc_conf_t *ncf);
-static v8::String::Utf8Value run_v8_script (ngx_http_nodejs_loc_conf_t *ncf);
+static v8::String::Utf8Value run_v8_script (ngx_http_nodejs_loc_conf_t *ncf, ngx_http_request_t *r);
 
 std::vector<std::string> create_arg_vec(int argc, const char* const* argv) {
     std::vector<std::string> vec;
@@ -138,7 +161,7 @@ static ngx_int_t ngx_http_nodejs_handler(ngx_http_request_t *r) {
 
 	ngx_http_nodejs_loc_conf_t *ncf = (ngx_http_nodejs_loc_conf_t*) ngx_http_get_module_loc_conf(r, ngx_http_nodejs_module);
 
-	v8::String::Utf8Value result = run_v8_script(ncf);
+	v8::String::Utf8Value result = run_v8_script(ncf, r);
 
 	u_char* text = (u_char*) to_u_char(result);
 
@@ -400,12 +423,67 @@ static void *start_nodejs (ngx_http_nodejs_loc_conf_t *ncf) {
 	ncf->isolate = isolate;
 
 	v8::Local<v8::String> source = v8::String::NewFromUtf8(isolate, (char*) ncf->code->data).ToLocalChecked();
-	ncf->script = v8::Global<v8::Script>(isolate, v8::Script::Compile(setup->context(), source).ToLocalChecked());
+
+	source = v8::String::Concat(isolate, v8::String::NewFromUtf8(isolate, ngx_http_nodejs_middleware_start).ToLocalChecked(), source);
+	source = v8::String::Concat(isolate, source, v8::String::NewFromUtf8(isolate, ngx_http_nodejs_middleware_end).ToLocalChecked());
+
+	v8::Local<v8::Script> script = v8::Script::Compile(setup->context(), source).ToLocalChecked();
+
+	ncf->script = v8::Global<v8::Script>(isolate, script);
+
+	v8::Local<v8::Value> result = script->Run(setup->context()).ToLocalChecked();
+
+	if (!result->IsFunction()) {
+		return (char*) NGX_CONF_ERROR;
+	}
+
+	ncf->function = v8::Global<v8::Value>(isolate, result);
+
 
 	return NGX_CONF_OK;
 }
 
-static v8::String::Utf8Value run_v8_script (ngx_http_nodejs_loc_conf_t *ncf) {
+static v8::Local<v8::Object> get_request_params (ngx_http_nodejs_loc_conf_t *ncf, ngx_http_request_t *r, v8::Local<v8::Context> c) {
+	v8::Isolate *iso = (v8::Isolate*) ncf->isolate;
+
+	v8::Local<v8::Object> request_data = v8::Object::New(iso);
+
+	request_data->Set(c, v8::String::NewFromUtf8(iso, "method").ToLocalChecked(), v8::String::NewFromUtf8(iso, (std::string { (const char*) r->method_name.data, r->method_name.len }).c_str()).ToLocalChecked()).Check();
+	request_data->Set(c, v8::String::NewFromUtf8(iso, "uri").ToLocalChecked(), v8::String::NewFromUtf8(iso, (std::string { (const char*) r->uri.data, r->uri.len + r->args.len }).c_str()).ToLocalChecked()).Check();
+
+	v8::Local<v8::Object> request_data_connection = v8::Object::New(iso);
+	request_data_connection->Set(c, v8::String::NewFromUtf8(iso, "remoteAddress").ToLocalChecked(), v8::String::NewFromUtf8(iso, (std::string { (const char*) r->connection->addr_text.data, r->connection->addr_text.len }).c_str()).ToLocalChecked()).Check();
+	request_data->Set(c, v8::String::NewFromUtf8(iso, "connection").ToLocalChecked(), request_data_connection).Check();
+
+	v8::Local<v8::Object> headers = v8::Object::New(iso);
+
+	ngx_list_part_t *part = &r->headers_in.headers.part;
+	ngx_table_elt_t *header = (ngx_table_elt_t*) part->elts;
+
+	for (ngx_uint_t i = 0;; i++) {
+		if (i >= part->nelts) {
+			if (part->next == NULL) {
+				break;
+			}
+
+			part = (ngx_list_part_t*) part->next;
+			header = (ngx_table_elt_t*) part->nelts;
+			i = 0;
+		}
+
+		headers->Set(c,
+			v8::String::NewFromUtf8(iso, (std::string { (const char*) header[i].key.data, header[i].key.len }).c_str()).ToLocalChecked(),
+			v8::String::NewFromUtf8(iso, (std::string { (const char*) header[i].value.data, header[i].value.len }).c_str()).ToLocalChecked()
+		).Check();
+	}
+
+	request_data->Set(c, v8::String::NewFromUtf8(iso, "headers").ToLocalChecked(), headers).Check();
+
+	return request_data;
+
+}
+
+static v8::String::Utf8Value run_v8_script (ngx_http_nodejs_loc_conf_t *ncf, ngx_http_request_t *r) {
 	{
 		if (ncf->isolate == NULL) {
 			start_nodejs(ncf);
@@ -423,10 +501,19 @@ static v8::String::Utf8Value run_v8_script (ngx_http_nodejs_loc_conf_t *ncf) {
 		v8::Context::Scope context_scope(context);
 		v8::Isolate::Scope isolate_scope(isolate);
 
-		v8::Local<v8::Script> script = v8::Local<v8::Script>::New(isolate, ncf->script);
+		v8::Local<v8::Value> function = v8::Local<v8::Value>::New(isolate, ncf->function);
+		v8::Local<v8::Object> function_object = function->ToObject(context).ToLocalChecked();
 
-		v8::Local<v8::Value> result = script->Run(context).ToLocalChecked();
+		v8::Local<v8::Object> request_data = get_request_params(ncf, r, context);
 
+		v8::Local<v8::Value> argv[] = { request_data };
+
+		v8::Local<v8::Value> result = function_object->CallAsFunction(context, context->Global(), 1, argv).ToLocalChecked();
+
+		if (result.IsEmpty()) {
+			return v8::String::Utf8Value (isolate, tryCatch.Exception());
+		}
+				
 		return v8::String::Utf8Value (isolate, result);
 	}
 }
