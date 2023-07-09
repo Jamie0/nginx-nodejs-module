@@ -6,7 +6,7 @@ Why, you ask? Why not!
 
 ## Current Project Status
 
-The project is in the very early stages of development. Currently, running a simple script inside a nginx location block and returning a primitive just about works (and is pleasingly very fast). There is currently no support for reading the HTTP request, or really doing anything useful.
+The project is in the very early stages of development. Currently, running a simple script inside a nginx location block and returning a primitive just about works (and is pleasingly very fast). There is no support yet for consuming the request body, or for anything asynchronous. 
 
 If you're better than me at C/C++ and want to contribute, certainly do open a pull request. 
 
@@ -27,9 +27,18 @@ If you're better than me at C/C++ and want to contribute, certainly do open a pu
 
             location /world {
                 nodejs_block {
-                    return JSON.stringify({ random_value: 1E6 * Math.random() | 0 })
+                    res.setHeader('content-type', 'application/json')
+
+                    return JSON.stringify({ req })
                 }
-            }  
+            }
+
+            location /external {
+                nodejs_allow_require on;
+                nodejs_block {
+                    return require('crypto').createHash('md5').update(req.connection.remoteAddress).digest('hex')
+                }
+            }
         }
     }
 

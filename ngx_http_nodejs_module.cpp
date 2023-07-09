@@ -29,6 +29,14 @@ static char ngx_http_nodejs_middleware_end[] =
 	"	return res.data;\n"
 	"}; fetch";
 
+static char ngx_http_nodejs_bootstrap_require[] = 
+"const publicRequire = require('module').createRequire(process.cwd() + '/');"
+"globalThis.require = publicRequire;"
+"require('vm').runInThisContext(process.argv[1]);";
+
+static char ngx_http_nodejs_bootstrap_isolate[] = 
+"require('vm').runInThisContext(process.argv[1]);";
+
 static char* ngx_http_nodejs(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static ngx_int_t ngx_http_nodejs_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_nodejs_init (ngx_cycle_t *cycle);
@@ -125,6 +133,8 @@ static void* ngx_http_nodejs_create_loc_conf(ngx_conf_t *cf) {
 	if (lcf == NULL) {
 		return NULL;
 	}
+
+	lcf->require = NGX_CONF_UNSET_UINT;
 
 	return lcf;
 }
@@ -408,11 +418,7 @@ static void *start_nodejs (ngx_http_nodejs_loc_conf_t *ncf) {
 
 	v8::MaybeLocal<v8::Value> loadenv_ret = node::LoadEnvironment(
 		env,
-		"const publicRequire ="
-		"  require('module').createRequire(process.cwd() + '/');"
-		"globalThis.require = publicRequire;"
-		"globalThis.embedVars = { nön_ascıı: '🏳️‍🌈' };"
-		"require('vm').runInThisContext(process.argv[1]);");
+		ncf->require ? ngx_http_nodejs_bootstrap_require : ngx_http_nodejs_bootstrap_isolate);
 
 	if (loadenv_ret.IsEmpty()) {
 		return (char*) NGX_CONF_ERROR;
