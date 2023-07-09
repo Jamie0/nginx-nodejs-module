@@ -6,7 +6,7 @@ Why, you ask? Why not!
 
 ## Current Project Status
 
-The project is in the very early stages of development. Currently, running a simple script inside a nginx location block and returning a primitive just about works. There is currently no support for reading the HTTP request, or really doing anything useful.
+The project is in the very early stages of development. Currently, running a simple script inside a nginx location block and returning a primitive just about works (and is pleasingly very fast). There is currently no support for reading the HTTP request, or really doing anything useful.
 
 If you're better than me at C/C++ and want to contribute, certainly do open a pull request. 
 
@@ -21,13 +21,13 @@ If you're better than me at C/C++ and want to contribute, certainly do open a pu
             listen 127.0.0.1:8080;
             location /hello {
                 nodejs_block {
-                    1E6 * Math.random() | 0 
+                    return 1E6 * Math.random() | 0 
                 }
             }
 
             location /world {
                 nodejs_block {
-                    JSON.stringify({ random_value: 1E6 * Math.random() | 0 })
+                    return JSON.stringify({ random_value: 1E6 * Math.random() | 0 })
                 }
             }  
         }
