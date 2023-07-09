@@ -20,8 +20,8 @@ extern "C" {
 
 static char ngx_http_nodejs_middleware_start[] = 
 	// "require('') \n"
-	"function fetch (req) { \n"
-	"	let res = {};\n"
+	"function fetch (req, res) { \n"
+	"	req._handlers = {};\n"
 	"	res.data = (function (req, res) {\n";
 
 static char ngx_http_nodejs_middleware_end[] = 
@@ -161,6 +161,8 @@ static ngx_int_t ngx_http_nodejs_handler(ngx_http_request_t *r) {
 
 	ngx_http_nodejs_loc_conf_t *ncf = (ngx_http_nodejs_loc_conf_t*) ngx_http_get_module_loc_conf(r, ngx_http_nodejs_module);
 
+	r->headers_out.status = NGX_HTTP_OK; /* 200 status code */
+
 	v8::String::Utf8Value result = run_v8_script(ncf, r);
 
 	u_char* text = (u_char*) to_u_char(result);
@@ -178,7 +180,6 @@ static ngx_int_t ngx_http_nodejs_handler(ngx_http_request_t *r) {
 	b->last_buf = 1; /* there will be no more buffers in the request */
 
 	/* Sending the headers for the reply. */
-	r->headers_out.status = NGX_HTTP_OK; /* 200 status code */
 	/* Get the content length of the body. */
 	r->headers_out.content_length_n = strlen((char*) text);
 	ngx_http_send_header(r); /* Send the headers */
@@ -443,7 +444,7 @@ static void *start_nodejs (ngx_http_nodejs_loc_conf_t *ncf) {
 	return NGX_CONF_OK;
 }
 
-static v8::Local<v8::Object> get_request_params (ngx_http_nodejs_loc_conf_t *ncf, ngx_http_request_t *r, v8::Local<v8::Context> c) {
+static v8::Local<v8::Object> get_http_client_request (ngx_http_nodejs_loc_conf_t *ncf, ngx_http_request_t *r, v8::Local<v8::Context> c) {
 	v8::Isolate *iso = (v8::Isolate*) ncf->isolate;
 
 	v8::Local<v8::Object> request_data = v8::Object::New(iso);
@@ -483,6 +484,105 @@ static v8::Local<v8::Object> get_request_params (ngx_http_nodejs_loc_conf_t *ncf
 
 }
 
+static ngx_http_request_t* get_request_from_nodejs (const v8::FunctionCallbackInfo<v8::Value>& args) {
+	v8::Local<v8::External> handle = args.This()->Get(
+		args.GetIsolate()->GetCurrentContext(),
+		v8::String::NewFromUtf8(args.GetIsolate(), "_ngx").ToLocalChecked()
+	).ToLocalChecked().As<v8::External>();
+
+	return (ngx_http_request_t*) handle->Value();
+}
+
+static void* nodejs_server_response_status (const v8::FunctionCallbackInfo<v8::Value>& args) {
+	ngx_http_request_t *r = get_request_from_nodejs(args);
+
+	uint u;
+	if (args[0]->Uint32Value(args.GetIsolate()->GetCurrentContext()).To(&u)) {
+		r->headers_out.status = u;
+	}
+
+	args.GetReturnValue().Set(args.This());
+
+	return (void*) &args;
+}
+
+static void* nodejs_server_response_set_header (const v8::FunctionCallbackInfo<v8::Value>& args) {
+	v8::HandleScope scope(args.GetIsolate());
+
+	ngx_http_request_t *r = get_request_from_nodejs(args);
+
+	std::string header_s = *v8::String::Utf8Value(args.GetIsolate(), args[0]);
+	std::string value_s = *v8::String::Utf8Value(args.GetIsolate(), args[1]);
+
+	// ok, we need to copy this into the nginx request, ensuring memory allocated stays on the ngx heap 
+
+	u_char *header = (u_char*) ngx_pnalloc(r->pool, header_s.length() + 1);
+	ngx_cpystrn(header, (u_char*) header_s.c_str(), header_s.length() + 1);
+
+	u_char *value = (u_char*) ngx_pnalloc(r->pool, value_s.length() + 1);
+	ngx_cpystrn(value, (u_char*) value_s.c_str(), value_s.length() + 1);
+
+	if (strcasecmp((char*) header, "content-type") == 0) {
+		r->headers_out.content_type.data = value;
+		r->headers_out.content_type.len = strlen((char*) value);
+
+	} else if (strcasecmp((char*) header, "location") == 0) {
+		r->headers_out.location = (ngx_table_elt_t*) ngx_list_push(&r->headers_out.headers);
+		r->headers_out.location->value.data = value;
+		r->headers_out.location->value.len = strlen((char*) value);
+		ngx_str_set(&r->headers_out.location->key, header);
+	} else if (strcasecmp((char*) header, "server") == 0) {
+		r->headers_out.server = (ngx_table_elt_t*) ngx_list_push(&r->headers_out.headers);
+		r->headers_out.server->value.data = value;
+		r->headers_out.server->value.len = strlen((char*) value);
+		ngx_str_set(&r->headers_out.server->key, header);
+	} else if (strcasecmp((char*) header, "refresh") == 0) {
+		r->headers_out.refresh = (ngx_table_elt_t*) ngx_list_push(&r->headers_out.headers);
+		r->headers_out.refresh->value.data = value;
+		r->headers_out.refresh->value.len = strlen((char*) value);
+		ngx_str_set(&r->headers_out.refresh->key, header);
+	} else if (strcasecmp((char*) header, "cache-control") == 0) {
+		r->headers_out.cache_control = (ngx_table_elt_t*) ngx_list_push(&r->headers_out.headers);
+		r->headers_out.cache_control->value.data = value;
+		r->headers_out.cache_control->value.len = strlen((char*) value);
+		ngx_str_set(&r->headers_out.cache_control->key, header);
+	} else if (strlen((char*) header) > 0) {
+		ngx_table_elt_t* header_r = (ngx_table_elt_t*) ngx_list_push(&r->headers_out.headers);
+
+		header_r->key.data = header;
+		header_r->key.len = strlen((char*) header);
+
+		header_r->value.data = value;
+		header_r->value.len = strlen((char*) value);
+	}
+
+	args.GetReturnValue().Set(args.This());
+
+	return (void*) &args;
+}
+
+static v8::Local<v8::Object> get_http_server_response (ngx_http_nodejs_loc_conf_t *ncf, ngx_http_request_t *r, v8::Local<v8::Context> c) {
+	v8::Isolate *iso = (v8::Isolate*) ncf->isolate;
+
+	v8::Local<v8::Object> response_object = v8::Object::New(iso);
+
+	response_object->Set(c, v8::String::NewFromUtf8(iso, "_ngx").ToLocalChecked(), v8::External::New(iso, (void *) r)).Check();
+
+	response_object->Set(
+		c, v8::String::NewFromUtf8(iso, "status").ToLocalChecked(),
+		v8::FunctionTemplate::New(iso, (v8::FunctionCallback) &nodejs_server_response_status)->GetFunction(c).ToLocalChecked()
+	).Check();
+
+	response_object->Set(
+		c, v8::String::NewFromUtf8(iso, "setHeader").ToLocalChecked(),
+		v8::FunctionTemplate::New(iso, (v8::FunctionCallback) &nodejs_server_response_set_header)->GetFunction(c).ToLocalChecked()
+	).Check();
+
+	return response_object;
+
+	// ngx_http_read_client_request_body
+}
+
 static v8::String::Utf8Value run_v8_script (ngx_http_nodejs_loc_conf_t *ncf, ngx_http_request_t *r) {
 	{
 		if (ncf->isolate == NULL) {
@@ -504,16 +604,17 @@ static v8::String::Utf8Value run_v8_script (ngx_http_nodejs_loc_conf_t *ncf, ngx
 		v8::Local<v8::Value> function = v8::Local<v8::Value>::New(isolate, ncf->function);
 		v8::Local<v8::Object> function_object = function->ToObject(context).ToLocalChecked();
 
-		v8::Local<v8::Object> request_data = get_request_params(ncf, r, context);
+		v8::Local<v8::Object> request_data = get_http_client_request(ncf, r, context);
+		v8::Local<v8::Object> response_object = get_http_server_response(ncf, r, context);
 
-		v8::Local<v8::Value> argv[] = { request_data };
+		v8::Local<v8::Value> argv[] = { request_data, response_object };
 
-		v8::Local<v8::Value> result = function_object->CallAsFunction(context, context->Global(), 1, argv).ToLocalChecked();
+		v8::Local<v8::Value> result = function_object->CallAsFunction(context, context->Global(), 2, argv).ToLocalChecked();
 
 		if (result.IsEmpty()) {
 			return v8::String::Utf8Value (isolate, tryCatch.Exception());
 		}
-				
+
 		return v8::String::Utf8Value (isolate, result);
 	}
 }
