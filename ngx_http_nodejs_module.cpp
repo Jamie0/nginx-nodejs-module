@@ -30,12 +30,12 @@ static char ngx_http_nodejs_middleware_end[] =
 	"}; fetch";
 
 static char ngx_http_nodejs_bootstrap_require[] = 
-"const publicRequire = require('module').createRequire(process.cwd() + '/');"
-"globalThis.require = publicRequire;"
-"require('vm').runInThisContext(process.argv[1]);";
+	"const publicRequire = require('module').createRequire(process.cwd() + '/');"
+	"globalThis.require = publicRequire;"
+	"require('vm').runInThisContext(process.argv[1]);";
 
 static char ngx_http_nodejs_bootstrap_isolate[] = 
-"require('vm').runInThisContext(process.argv[1]);";
+	"require('vm').runInThisContext(process.argv[1]);";
 
 static char* ngx_http_nodejs(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static ngx_int_t ngx_http_nodejs_handler(ngx_http_request_t *r);
@@ -520,7 +520,7 @@ static void* nodejs_server_response_set_header (const v8::FunctionCallbackInfo<v
 	std::string header_s = *v8::String::Utf8Value(args.GetIsolate(), args[0]);
 	std::string value_s = *v8::String::Utf8Value(args.GetIsolate(), args[1]);
 
-	// ok, we need to copy this into the nginx request, ensuring memory allocated stays on the ngx heap 
+	// ok, we need ensure these strings will stay on the ngx heap 
 
 	u_char *header = (u_char*) ngx_pnalloc(r->pool, header_s.length() + 1);
 	ngx_cpystrn(header, (u_char*) header_s.c_str(), header_s.length() + 1);
