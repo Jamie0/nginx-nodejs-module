@@ -71,9 +71,9 @@ ngx_module_t ngx_http_nodejs_module = {
 
 typedef struct ngx_http_nodejs_loc_conf_s {
 	ngx_str_t * code;
-	v8::Local<v8::Script> * script;
+	v8::Global<v8::Script> script;
 	v8::Isolate * isolate;
-	v8::Local<v8::Context> * context;
+	v8::Global<v8::Context> context;
 } ngx_http_nodejs_loc_conf_t;
 
 }
@@ -260,13 +260,13 @@ static ngx_int_t ngx_http_nodejs_conf_read_token(ngx_conf_t *cf, ngx_http_nodejs
 					return NGX_ERROR;
 				}
 
-				code->data = (u_char*) ngx_pnalloc(cf->pool, b->pos - 1 - start + 1);
+				code->data = (u_char*) ngx_pnalloc(cf->pool, b->pos - start);
 
 				if (code->data == NULL) {
 					return NGX_ERROR;
 				}
 
-				code->len = b->pos - 1 - start + 1;
+				code->len = b->pos - start;
 				ngx_cpystrn(code->data, start, code->len);
 
 				ncf->code = code;
@@ -396,8 +396,11 @@ static void *start_nodejs (ngx_http_nodejs_loc_conf_t *ncf) {
 
 	exit_code = node::SpinEventLoop(env).FromMaybe(1);
 
-	ncf->context = &context;
+	ncf->context = v8::Global<v8::Context>(isolate, setup->context());
 	ncf->isolate = isolate;
+
+	v8::Local<v8::String> source = v8::String::NewFromUtf8(isolate, (char*) ncf->code->data).ToLocalChecked();
+	ncf->script = v8::Global<v8::Script>(isolate, v8::Script::Compile(setup->context(), source).ToLocalChecked());
 
 	return NGX_CONF_OK;
 }
@@ -415,19 +418,12 @@ static v8::String::Utf8Value run_v8_script (ngx_http_nodejs_loc_conf_t *ncf) {
 		v8::Locker locker(isolate);
 		v8::HandleScope handle_scope(isolate);
 
-		v8::Local<v8::Context> context = v8::Context::New(isolate);
+		v8::Local<v8::Context> context = v8::Local<v8::Context>::New(isolate, ncf->context);
 
 		v8::Context::Scope context_scope(context);
 		v8::Isolate::Scope isolate_scope(isolate);
 
-		v8::Local<v8::Script> script;
-
-		// if (ncf->script == NULL) {
-			v8::Local<v8::String> source = v8::String::NewFromUtf8(isolate, (char*) ncf->code->data).ToLocalChecked();
-			script = v8::Script::Compile(context, source).ToLocalChecked();
-
-			// ncf->script = v8::Persistent<v8::Script> &script; // i don't know enough C++ to do that :')
-		//}
+		v8::Local<v8::Script> script = v8::Local<v8::Script>::New(isolate, ncf->script);
 
 		v8::Local<v8::Value> result = script->Run(context).ToLocalChecked();
 
