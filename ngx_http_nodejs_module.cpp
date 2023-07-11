@@ -175,6 +175,7 @@ static ngx_int_t ngx_http_nodejs_handler(ngx_http_request_t *r) {
 	r->headers_out.status = NGX_HTTP_OK;
 
 	v8::String::Utf8Value result = run_v8_script(ncf, r);
+	r->count++;
 
 	return NGX_OK;
 }
@@ -567,6 +568,7 @@ static void* nodejs_server_response_end (const v8::FunctionCallbackInfo<v8::Valu
 		b->last_buf = 1;
 
 		ngx_http_output_filter(r, &out);
+		ngx_http_finalize_request(r, NGX_DONE);
 	}
 
 	args.GetReturnValue().Set(args.This());
@@ -743,8 +745,6 @@ static v8::String::Utf8Value run_v8_script (ngx_http_nodejs_loc_conf_t *ncf, ngx
 		}
 
 		if (result->IsPromise() || uv_loop_alive(setup->event_loop())) {
-			r->count++;
-
 			schedule_event_loop(r);
 		}
 

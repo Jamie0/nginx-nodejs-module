@@ -2,12 +2,55 @@ ngx_addon_name=ngx_http_nodejs_module
 
 nodejs_flags="-std=c++17"
 
-nodejs_libs="-L${ngx_addon_dir}/ext/node-v18.16.1/out/Release -lstdc++ $nodejs_flags -lpthread -lz -lzlib -lnode.108"
+SYSTEM_NODE=0
 
-nodejs_include="\
-    $ngx_addon_dir/ext/node-v18.16.1/deps/uv/include \
-    $ngx_addon_dir/ext/node-v18.16.1/deps/v8/include \
-    $ngx_addon_dir/ext/node-v18.16.1/src"
+libnode_path=`ldconfig -p 2>/dev/null | grep libnode.so$ | awk '{ print $4 }'`
+
+if [[ "$libnode_path" != "" ]]; then
+	SYSTEM_NODE=1
+fi
+
+if [[ $SYSTEM_NODE -eq 0 ]]; then
+	echo 'Could not find system nodejs-libs (libnode.so) - linking from source'
+
+	nodejs_dir="$ngx_addon_dir/ext/node-v18.16.1"
+
+	if [[ ! -d "$nodejs_dir/out/Release" ]]; then
+
+		if [[ "$NUMCPUS" -eq "" ]]; then
+			NUMCPUS=`nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo Failed to detect number of CPUs, please export NUMCPUS=n || echo 1`
+		fi
+
+		mkdir -p ext
+		pushd $nodejs_dir
+
+		wget "https://nodejs.org/dist/v18.16.1/node-v18.16.1.tar.gz" && tar -xf ./nodejs-18.16.1.tar.gz && rm ./nodejs-18.16.1.tar.gz || (echo Failed to download node && exit 1)
+
+		popd
+
+		if [[ ! -d "$nodejs_dir/tools" ]]; then
+			echo Configuring Node
+			./configure --enable-static
+		fi
+
+		echo Making node
+		make -j$NUMCPUS
+	else 
+		echo libnode was found locally
+	fi
+
+	nodejs_link_version=node.108
+
+	nodejs_include="\
+	    $ngx_addon_dir/ext/node-v18.16.1/deps/uv/include \
+	    $ngx_addon_dir/ext/node-v18.16.1/deps/v8/include \
+	    $ngx_addon_dir/ext/node-v18.16.1/src"
+
+	libnode_path=${ngx_addon_dir}/ext/node-v18.16.1/out/Release
+fi
+
+nodejs_libs="-L${libnode_path} -lstdc++ $nodejs_flags -lpthread -lz -lzlib -l${nodejs_link_version}"
+
 
 ngx_feature="node"
 ngx_feature_run=no
@@ -33,7 +76,9 @@ ngx_module_deps=""
 ngx_module_srcs=" $ngx_addon_dir/ngx_http_nodejs_module.cpp "
 ngx_module_libs="$nodejs_libs"
 
-ngx_modext=".dylib"
+if [[ "$OSTYPE" == "darwin"* ]]; then
+	ngx_modext=".dylib"
+fi
 
 . auto/module
 

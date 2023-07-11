@@ -14,4 +14,6 @@ fix() {
 	echo 'fixed?' $?
 }
 
+echo Downloading nodejs 
+
 fix&
