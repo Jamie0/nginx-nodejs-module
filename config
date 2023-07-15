@@ -10,7 +10,7 @@ libnode_path=`ldconfig -p 2>/dev/null | grep libnode.so$ | awk '{ print $4 }'`
 if test "$libnode_path" != ""; then
 	SYSTEM_NODE=1
 
-	nodejs_include="/usr/include/nodejs/deps/uv/include /usr/include/nodejs/deps/v8/include /usr/include/nodejs/src"
+	nodejs_include="/usr/include/libnode"
 fi
 
 if test "$SYSTEM_NODE" = 0; then
