@@ -1,6 +1,7 @@
 ngx_addon_name=ngx_http_nodejs_module
 
 nodejs_flags="-std=c++17"
+nodejs_link_version=node
 
 SYSTEM_NODE=0
 
@@ -8,6 +9,8 @@ libnode_path=`ldconfig -p 2>/dev/null | grep libnode.so$ | awk '{ print $4 }'`
 
 if [[ "$libnode_path" != "" ]]; then
 	SYSTEM_NODE=1
+
+	nodejs_include="/usr/include/nodejs/deps/uv/include /usr/include/nodejs/deps/v8/include /usr/include/nodejs/src"
 fi
 
 if [[ $SYSTEM_NODE -eq 0 ]]; then
