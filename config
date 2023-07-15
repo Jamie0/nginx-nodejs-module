@@ -50,7 +50,7 @@ if test "$SYSTEM_NODE" = 0; then
 	    $ngx_addon_dir/ext/node-v18.16.1/src"
 
 	libnode_path=${ngx_addon_dir}/ext/node-v18.16.1/out/Release
-fibash
+fi
 
 nodejs_libs="-L${libnode_path} -lstdc++ $nodejs_flags -lpthread -lz -lzlib -l${nodejs_link_version}"
 
