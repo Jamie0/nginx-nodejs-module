@@ -4,7 +4,7 @@ Run node (v8) scripts directly inside nginx!
 
 ## Current Project Status
 
-The project is in the very early stages of development. Currently, running a simple script inside a nginx location block and returning a primitive just about works (and is pleasingly very fast). There is no support yet for consuming the request body, or for complex asynchronous operations that involve I/O. 
+The project is in the very early stages of development. Currently, running a simple script inside a nginx location block and returning a primitive just about works (and is pleasingly very fast). There is no support _yet_ for consuming the request body, or for complex asynchronous operations that involve I/O. 
 
 If you're better than me at C/C++ and want to contribute, certainly do open a pull request. 
 
@@ -17,10 +17,23 @@ If you're better than me at C/C++ and want to contribute, certainly do open a pu
 	http {
 		server {
 			listen 127.0.0.1:8080;
+
 			location /hello {
 				nodejs_block {
 					res.setHeader('content-type', 'text/html')
 					return 1E6 * Math.random() | 0 
+				}
+			}
+
+			location /file {
+				nodejs_allow_require on;
+				nodejs_block {
+					const fs = require('fs')
+
+					return async function (req, res, next) {
+						res.setHeader('content-type', 'text/html')
+						res.end(await fs.promises.readFile('/tmp/test.html'))
+					}
 				}
 			}
 
