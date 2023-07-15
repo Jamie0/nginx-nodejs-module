@@ -1,13 +1,8 @@
 #include <csignal>
 #include <cstring>
-#include <libplatform/libplatform.h>
 #include <node.h>
 #include <node_api.h>
 #include <node_buffer.h>
-#include <env.h>
-#include <env-inl.h>
-#include <node_v8_platform-inl.h>
-#include <v8.h>
 #include <uv.h>
 
 extern "C" {
