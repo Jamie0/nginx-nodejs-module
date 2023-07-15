@@ -74,6 +74,8 @@ typedef struct ngx_http_nodejs_ctx_s {
     uint done;
     v8::Persistent<v8::Object, v8::CopyablePersistentTraits<v8::Object>> request_data;
     v8::Persistent<v8::Object, v8::CopyablePersistentTraits<v8::Object>> response_object;
+    node::async_context asyncContext;
+	v8::Isolate *isolate;
 } ngx_http_nodejs_ctx_t;
 
 static ngx_command_t ngx_http_nodejs_commands[] = {
@@ -845,8 +847,8 @@ static int nodejs_server_dispatch_event (
 				isolate,
 				context->Global(),
 				v8::Local<v8::Function>::Cast(handler),
-				argc, argv
-			);
+				argc, argv, ctx->asyncContext
+			).ToLocalChecked();
 
 		if (result.IsEmpty()) {
 			return 1;
@@ -1257,6 +1259,7 @@ static void nodejs_release_context (void *data) {
 
 	ctx->request_data.SetWeak();
 	ctx->response_object.SetWeak();
+	node::EmitAsyncDestroy(ctx->isolate, ctx->asyncContext);
 }
 
 #define v8_persist_t v8::Persistent<v8::Object, v8::CopyablePersistentTraits<v8::Object>>
@@ -1294,6 +1297,8 @@ static v8::String::Utf8Value run_v8_script (
 		}
 
 		ngx_http_set_ctx(r, ctx, ngx_http_nodejs_module);
+
+		ctx->isolate = isolate;
 	}
 
 
@@ -1315,12 +1320,20 @@ static v8::String::Utf8Value run_v8_script (
 	ctx->request_data = v8_persist_t(isolate, request_data);
 	ctx->response_object = v8_persist_t(isolate, response_object);
 
+	ctx->asyncContext = node::EmitAsyncInit(isolate, request_data, "ClientRequest", -1);
+
 	v8::Local<v8::Value> argv[] = { request_data, response_object };
 
 	v8::Local<v8::Function> function = v8::Local<v8::Function>::New(isolate, ncf->function);
 
 	v8::Local<v8::Value> result =
-		node::MakeCallback(isolate, context->Global(), function, 2, argv);
+		node::MakeCallback(
+			isolate,
+			context->Global(),
+			function,
+			2, argv,
+			ctx->asyncContext
+		).ToLocalChecked();
 
 	if (result.IsEmpty()) {
 		return v8::String::Utf8Value (isolate, tryCatch.Exception());
