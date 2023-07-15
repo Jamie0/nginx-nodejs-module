@@ -8,7 +8,7 @@ The project is in the very early stages of development. Currently, running a sim
 
 If you're better than me at C/C++ and want to contribute, certainly do open a pull request. 
 
-## Example
+## Example Configuration
 
 	load_module /usr/local/nginx/lib/ngx_http_nodejs_module.so;
 	events {}
@@ -86,10 +86,16 @@ If you're better than me at C/C++ and want to contribute, certainly do open a pu
 
 The module can be built as a dynamic module using the nginx build system, but you will need to fetch some dependencies if you don't have libnode on your system (nvm doesn't include it). If node couldn't be found, it will be compiled during the configuration step. V8 will take some time to compile, so grab a cup of coffee (or three). 
 
+For Ubuntu, the easiest (and recommended) way to install libnode is to use this [third party PPA](https://launchpad.net/~mmomtchev/+archive/ubuntu/libnode-18.x) and run `apt-get install libnode108 libnode-dev`. 
+
 
     cd nginx-1.25.1
     ./configure --add-dynamic-module=../nginx-nodejs-module [...]
     make && make install
+
+You can also build the included Dockerfile and run like so
+
+	docker run -v ./examples/nginx.conf:/etc/nginx/nginx.conf -p 8080:8080 nginx-with-nodejs 
 
 ## Motivation
 
