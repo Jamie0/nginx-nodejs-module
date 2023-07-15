@@ -66,6 +66,8 @@ typedef struct ngx_http_nodejs_loc_conf_s {
 	v8::Global<v8::Context> context;
 	v8::Global<v8::Function> function;
 
+	node::async_context asyncContext;
+
 	ngx_event_t timer;
 } ngx_http_nodejs_loc_conf_t;
 
@@ -557,6 +559,8 @@ static void *start_nodejs (ngx_http_nodejs_loc_conf_t *ncf, ngx_http_request_t *
 	}
 
 	ncf->function = v8::Global<v8::Function>(isolate, func);
+
+	ncf->asyncContext = node::EmitAsyncInit(isolate, result->ToObject(setup->context()).ToLocalChecked(), "ClientRequest", -1);
 
 	return NGX_CONF_OK;
 }
@@ -1259,7 +1263,6 @@ static void nodejs_release_context (void *data) {
 
 	ctx->request_data.SetWeak();
 	ctx->response_object.SetWeak();
-	node::EmitAsyncDestroy(ctx->isolate, ctx->asyncContext);
 }
 
 #define v8_persist_t v8::Persistent<v8::Object, v8::CopyablePersistentTraits<v8::Object>>
@@ -1320,7 +1323,7 @@ static v8::String::Utf8Value run_v8_script (
 	ctx->request_data = v8_persist_t(isolate, request_data);
 	ctx->response_object = v8_persist_t(isolate, response_object);
 
-	ctx->asyncContext = node::EmitAsyncInit(isolate, request_data, "ClientRequest", -1);
+	ctx->asyncContext = ncf->asyncContext;
 
 	v8::Local<v8::Value> argv[] = { request_data, response_object };
 
