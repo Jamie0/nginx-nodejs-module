@@ -707,7 +707,7 @@ static ngx_http_request_t* get_request_from_nodejs (
 	return (ngx_http_request_t*) handle->Value();
 }
 
-static void* nodejs_server_response_status (const v8::FunctionCallbackInfo<v8::Value> &args) {
+static void nodejs_server_response_status (const v8::FunctionCallbackInfo<v8::Value> &args) {
 	ngx_http_request_t *r = get_request_from_nodejs(args);
 
 	v8::Local<v8::Context> context = args.GetIsolate()->GetCurrentContext();
@@ -727,8 +727,6 @@ static void* nodejs_server_response_status (const v8::FunctionCallbackInfo<v8::V
 
 
 	args.GetReturnValue().Set(args.This());
-
-	return (void*) &args;
 }
 
 static bool nodejs_server_has_event_handler (
@@ -858,17 +856,15 @@ static int nodejs_server_dispatch_event (
 	return 0;
 }
 
-static void* nodejs_server_response_next (const v8::FunctionCallbackInfo<v8::Value> &args) {
+static void nodejs_server_response_next (const v8::FunctionCallbackInfo<v8::Value> &args) {
 	ngx_http_request_t *r = get_request_from_nodejs(args);
 
 	ngx_http_finalize_request(r, r->headers_out.status);
 
 	args.GetReturnValue().Set(args.This());
-
-	return (void*) &args;
 }
 
-static void* nodejs_server_response_write_head (const v8::FunctionCallbackInfo<v8::Value> &args) {
+static void nodejs_server_response_write_head (const v8::FunctionCallbackInfo<v8::Value> &args) {
 	ngx_http_request_t *r = get_request_from_nodejs(args);
 
 	v8::Local<v8::Context> context = args.GetIsolate()->GetCurrentContext();
@@ -900,11 +896,9 @@ static void* nodejs_server_response_write_head (const v8::FunctionCallbackInfo<v
 	).Check();
 
 	args.GetReturnValue().Set(args.This());
-
-	return (void*) &args;
 }
 
-static void* nodejs_server_response_write (const v8::FunctionCallbackInfo<v8::Value> &args) {
+static void nodejs_server_response_write (const v8::FunctionCallbackInfo<v8::Value> &args) {
 	ngx_http_request_t *r = get_request_from_nodejs(args);
 
 	v8::Local<v8::Context> context = args.GetIsolate()->GetCurrentContext();
@@ -917,7 +911,7 @@ static void* nodejs_server_response_write (const v8::FunctionCallbackInfo<v8::Va
 
 
 	if (!args.Length()) {
-		return (void*) &args;
+		return;
 	}
 
 	v8::Local<v8::String> headersSentSym =
@@ -971,11 +965,9 @@ static void* nodejs_server_response_write (const v8::FunctionCallbackInfo<v8::Va
 
 		ngx_http_output_filter(r, &out);
 	}
-
-	return (void*) &args;
 }
 
-static void* nodejs_server_response_end (const v8::FunctionCallbackInfo<v8::Value> &args) {
+static void nodejs_server_response_end (const v8::FunctionCallbackInfo<v8::Value> &args) {
 	ngx_http_request_t *r = get_request_from_nodejs(args);
 
 	if (!r->headers_out.status) {
@@ -1048,8 +1040,6 @@ static void* nodejs_server_response_end (const v8::FunctionCallbackInfo<v8::Valu
 	ngx_http_finalize_request(r, NGX_DONE);
 
 	args.GetReturnValue().Set(args.This());
-
-	return (void*) &args;
 }
 
 void ngx_str_set_n (ngx_str_t *str, u_char *a, u_int n) {
@@ -1057,7 +1047,7 @@ void ngx_str_set_n (ngx_str_t *str, u_char *a, u_int n) {
 	str->len = n;
 }
 
-static void* nodejs_server_response_set_header (const v8::FunctionCallbackInfo<v8::Value>& args) {
+static void nodejs_server_response_set_header (const v8::FunctionCallbackInfo<v8::Value>& args) {
 	v8::HandleScope scope(args.GetIsolate());
 
 	ngx_http_request_t *r = get_request_from_nodejs(args);
@@ -1129,8 +1119,6 @@ static void* nodejs_server_response_set_header (const v8::FunctionCallbackInfo<v
 	}
 
 	args.GetReturnValue().Set(args.This());
-
-	return (void*) &args;
 }
 
 static v8::Local<v8::Object> get_http_server_response (
@@ -1155,7 +1143,7 @@ static v8::Local<v8::Object> get_http_server_response (
 		v8::String::NewFromUtf8(isolate, "status").ToLocalChecked(),
 		v8::FunctionTemplate::New(
 			isolate,
-			(void (*)(const v8::FunctionCallbackInfo<v8::Value> &))
+			(v8::FunctionCallback)
 				&nodejs_server_response_status
 		)->GetFunction(context).ToLocalChecked()
 	).Check();
@@ -1165,7 +1153,7 @@ static v8::Local<v8::Object> get_http_server_response (
 		v8::String::NewFromUtf8(isolate, "next").ToLocalChecked(),
 		v8::FunctionTemplate::New(
 			isolate,
-			(void (*)(const v8::FunctionCallbackInfo<v8::Value> &))
+			(v8::FunctionCallback)
 				&nodejs_server_response_next
 		)->GetFunction(context).ToLocalChecked()
 	).Check();
@@ -1176,7 +1164,7 @@ static v8::Local<v8::Object> get_http_server_response (
 		v8::String::NewFromUtf8(isolate, "setHeader").ToLocalChecked(),
 		v8::FunctionTemplate::New(
 			isolate,
-			(void (*)(const v8::FunctionCallbackInfo<v8::Value> &))
+			(v8::FunctionCallback)
 				&nodejs_server_response_set_header
 		)->GetFunction(context).ToLocalChecked()
 	).Check();
@@ -1186,7 +1174,7 @@ static v8::Local<v8::Object> get_http_server_response (
 		v8::String::NewFromUtf8(isolate, "write").ToLocalChecked(),
 		v8::FunctionTemplate::New(
 			isolate,
-			(void (*)(const v8::FunctionCallbackInfo<v8::Value> &))
+			(v8::FunctionCallback)
 				&nodejs_server_response_write
 		)->GetFunction(context).ToLocalChecked()
 	).Check();
@@ -1196,7 +1184,7 @@ static v8::Local<v8::Object> get_http_server_response (
 		v8::String::NewFromUtf8(isolate, "writeHead").ToLocalChecked(),
 		v8::FunctionTemplate::New(
 			isolate,
-			(void (*)(const v8::FunctionCallbackInfo<v8::Value> &))
+			(v8::FunctionCallback)
 				&nodejs_server_response_write_head
 		)->GetFunction(context).ToLocalChecked()
 	).Check();
@@ -1206,7 +1194,7 @@ static v8::Local<v8::Object> get_http_server_response (
 		v8::String::NewFromUtf8(isolate, "end").ToLocalChecked(),
 		v8::FunctionTemplate::New(
 			isolate,
-			(void (*)(const v8::FunctionCallbackInfo<v8::Value> &))
+			(v8::FunctionCallback)
 				&nodejs_server_response_end
 		)->GetFunction(context).ToLocalChecked()
 	).Check();
