@@ -7,7 +7,7 @@ SYSTEM_NODE=0
 
 libnode_path=`ldconfig -p 2>/dev/null | grep libnode.so$ | awk '{ print $4 }'`
 
-. $ngx_addon_dir/config.bash
+source $ngx_addon_dir/config.bash
 
 nodejs_libs="-L${libnode_path} -lstdc++ $nodejs_flags -lpthread -lz -lzlib -l${nodejs_link_version}"
 
