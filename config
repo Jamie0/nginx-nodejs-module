@@ -52,7 +52,7 @@ if test "$SYSTEM_NODE" = 0; then
 	libnode_path=${ngx_addon_dir}/ext/node-v18.16.1/out/Release
 fi
 
-nodejs_libs="-L${libnode_path} -lstdc++ $nodejs_flags -lpthread -lz -lzlib -l${nodejs_link_version}"
+nodejs_libs="-L${libnode_path} -lstdc++ $nodejs_flags -lpthread -lz -l${nodejs_link_version}"
 
 
 ngx_feature="node"
