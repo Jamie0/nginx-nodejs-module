@@ -4,7 +4,7 @@ Run node (v8) scripts directly inside nginx!
 
 ## Current Project Status
 
-The project is in the very early stages of development. Currently, running a simple script inside a nginx location block and returning a primitive just about works (and is pleasingly very fast). There is no support _yet_ for consuming the request body, or for complex asynchronous operations that involve I/O. 
+The project is in the very early stages of development. Currently, running a simple script inside a nginx location block and returning a primitive just about works (and is pleasingly very fast). There is no support _yet_ for outgoing HTTP requests.
 
 If you're better than me at C/C++ and want to contribute, certainly do open a pull request. 
 

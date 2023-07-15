@@ -251,14 +251,10 @@ static ngx_int_t ngx_http_nodejs_handler (ngx_http_request_t *r) {
 
 	v8::String::Utf8Value result = run_v8_script(ncf, r);
 
-	printf("a\n");
-
 	if ((r->method & NGX_HTTP_GET) != NGX_HTTP_GET
 			&& nodejs_server_has_event_handler(r, false, "data")) {
-		printf("read body\n");
 		ngx_http_read_client_request_body(r, ngx_http_nodejs_body_handler);
 	} else {
-		printf("discard body\n");
 		ngx_http_discard_request_body(r);
 
 		nodejs_server_dispatch_event(r, false, "end", 0, {});
@@ -442,7 +438,6 @@ static char *ngx_http_nodejs (ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
 
 static std::unique_ptr<node::MultiIsolatePlatform> platform;
 static std::unique_ptr<node::InitializationResult> result;
-static v8::Local<v8::Context> context;
 static std::unique_ptr<node::CommonEnvironmentSetup> setup;
 
 static ngx_int_t ngx_http_nodejs_init (ngx_cycle_t *cycle) {
@@ -732,7 +727,7 @@ static void* nodejs_server_response_status (const v8::FunctionCallbackInfo<v8::V
 		args.This()
 			->Set(
 				context,
-				v8::String::NewFromUtf8(isolate, "_status").ToLocalChecked(),
+				v8::String::NewFromUtf8(isolate, "statusCode").ToLocalChecked(),
 				v8::Number::New(isolate, u)
 			).Check();
 	}
@@ -768,7 +763,8 @@ static bool nodejs_server_has_event_handler (
 
 	v8::Context::Scope context_scope(context);
 
-	v8::Local<v8::Object> dispatchee = v8::Local<v8::Object>::New(isolate, response ? ctx->response_object : ctx->request_data);
+	v8::Local<v8::Object> dispatchee =
+		v8::Local<v8::Object>::New(isolate, response ? ctx->response_object : ctx->request_data);
 
 	v8::Local<v8::Value> handlers = dispatchee->Get(
 		context,
@@ -817,7 +813,8 @@ static int nodejs_server_dispatch_event (
 	v8::Local<v8::Context> context = v8::Local<v8::Context>::New(isolate, ncf->context);
 	v8::Context::Scope context_scope(context);
 
-	v8::Local<v8::Object> dispatchee = v8::Local<v8::Object>::New(isolate, response ? ctx->response_object : ctx->request_data);
+	v8::Local<v8::Object> dispatchee =
+		v8::Local<v8::Object>::New(isolate, response ? ctx->response_object : ctx->request_data);
 
 	v8::Local<v8::Value> handlers = dispatchee->Get(
 		context,
@@ -853,7 +850,12 @@ static int nodejs_server_dispatch_event (
 			continue;
 
 		v8::Local<v8::Value> result =
-			node::MakeCallback(isolate, context->Global(), v8::Local<v8::Function>::Cast(handler), argc, argv);
+			node::MakeCallback(
+				isolate,
+				context->Global(),
+				v8::Local<v8::Function>::Cast(handler),
+				argc, argv
+			);
 
 		if (result.IsEmpty()) {
 			return 1;
@@ -889,7 +891,7 @@ static void* nodejs_server_response_write_head (const v8::FunctionCallbackInfo<v
 		r->headers_out.status = u;
 		args.This()->Set(
 			context,
-			v8::String::NewFromUtf8(isolate, "_status").ToLocalChecked(),
+			v8::String::NewFromUtf8(isolate, "statusCode").ToLocalChecked(),
 			v8::Number::New(isolate, u)
 		).Check();
 	}
@@ -959,8 +961,6 @@ static void* nodejs_server_response_write (const v8::FunctionCallbackInfo<v8::Va
 		body = (u_char*) ngx_pcalloc(r->pool, size + 1);
 		ngx_cpystrn(body, (u_char*) node::Buffer::Data(_data), size + 1);
 	}
-
-	printf("send chain %s %i ", body, size);
 
 	if (body != NULL) {
 		ngx_buf_t *b;
@@ -1278,6 +1278,8 @@ static void nodejs_release_context (void *data) {
 	ctx->response_object.SetWeak();
 }
 
+#define v8_persist_t v8::Persistent<v8::Object, v8::CopyablePersistentTraits<v8::Object>>
+
 static v8::String::Utf8Value run_v8_script (
 	ngx_http_nodejs_loc_conf_t *ncf,
 	ngx_http_request_t *r
@@ -1304,7 +1306,10 @@ static v8::String::Utf8Value run_v8_script (
 		if (ctx == NULL) {
 			v8::HandleScope handle_scope(isolate);
 
-			return v8::String::Utf8Value(isolate, v8::String::NewFromUtf8(isolate, "").ToLocalChecked());
+			return v8::String::Utf8Value(
+				isolate,
+				v8::String::NewFromUtf8(isolate, "").ToLocalChecked()
+			);
 		}
 
 		ngx_http_set_ctx(r, ctx, ngx_http_nodejs_module);
@@ -1326,8 +1331,8 @@ static v8::String::Utf8Value run_v8_script (
 	v8::Local<v8::Object> request_data = get_http_client_request(ncf, r, context);
 	v8::Local<v8::Object> response_object = get_http_server_response(ncf, r, context);
 
-	ctx->request_data = v8::Persistent<v8::Object, v8::CopyablePersistentTraits<v8::Object>>(isolate, request_data);
-	ctx->response_object = v8::Persistent<v8::Object, v8::CopyablePersistentTraits<v8::Object>>(isolate, response_object);
+	ctx->request_data = v8_persist_t(isolate, request_data);
+	ctx->response_object = v8_persist_t(isolate, response_object);
 
 	v8::Local<v8::Value> argv[] = { request_data, response_object };
 
