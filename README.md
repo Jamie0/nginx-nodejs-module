@@ -25,6 +25,22 @@ If you're better than me at C/C++ and want to contribute, certainly do open a pu
 				}
 			}
 
+			location /echo_body {
+				nodejs_block {
+					return function (req, res, next) {
+						let data = [];
+
+						req.on('data, function (result) {
+							data.push(result);
+						})
+
+						req.on('end, function () {
+							res.end(Buffer.concat(data));
+						})
+					}
+				}
+			}
+
 			location /file {
 				nodejs_allow_require on;
 				nodejs_block {

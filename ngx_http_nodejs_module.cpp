@@ -23,7 +23,14 @@ extern "C" {
 
 static char ngx_http_nodejs_middleware_start[] = 
 	"function _fetch (req, res) { \n"
-	"	req._handlers = {};\n"
+	"	let next = req.next;\n"
+	"	req.url = new URL(req.uri, req.headers.Host"
+	"		? (req.connection.encrypted ? 'https://' : 'http://') + req.headers.Host"
+	"		: 'local://localhost')\n"
+	"	req.on = function (event, handler) {\n"
+	"		(req._handlers[event] = req._handlers[event] || [])\n"
+	"			.push(handler);\n"
+	"	}\n"
 	"	res.json = function (data) {\n"
 	"		res.setHeader('content-type', 'application/json');\n"
 	"		res.end(JSON.stringify(data));"
@@ -35,7 +42,7 @@ static char ngx_http_nodejs_middleware_end[] =
 	"	if (typeof res.data == 'function') {\n"
 	"		let result = res.data(req, res, res.next);\n"
 	"		if (result && result.then) {\n"
-	"			result.catch(function () { res.status(503); res.next(); });\n"
+	"			result.catch(function (error) { res.status(503); res.next(error); });\n"
 	"		}\n"
 	"	} else\n"
 	"		res.end(res.data);\n"
@@ -58,14 +65,21 @@ static ngx_int_t ngx_http_nodejs_init (ngx_cycle_t *cycle);
 typedef struct ngx_http_nodejs_loc_conf_s {
 	ngx_flag_t require;
 
-	ngx_str_t * code;
+	ngx_str_t *code;
 	v8::Global<v8::Script> script;
-	v8::Isolate * isolate;
+	v8::Isolate *isolate;
 	v8::Global<v8::Context> context;
 	v8::Global<v8::Function> function;
 
 	ngx_event_t timer;
 } ngx_http_nodejs_loc_conf_t;
+
+
+typedef struct ngx_http_nodejs_ctx_s {
+    uint done;
+    v8::Persistent<v8::Object, v8::CopyablePersistentTraits<v8::Object>> request_data;
+    v8::Persistent<v8::Object, v8::CopyablePersistentTraits<v8::Object>> response_object;
+} ngx_http_nodejs_ctx_t;
 
 static ngx_command_t ngx_http_nodejs_commands[] = {
 
@@ -126,10 +140,21 @@ ngx_module_t ngx_http_nodejs_module = {
 }
 
 
-static void *start_nodejs (ngx_http_nodejs_loc_conf_t *ncf, ngx_http_request_t *r);
+static void* start_nodejs (ngx_http_nodejs_loc_conf_t *ncf, ngx_http_request_t *r);
 
 static v8::String::Utf8Value
 	run_v8_script (ngx_http_nodejs_loc_conf_t *ncf, ngx_http_request_t *r);
+
+static bool
+	nodejs_server_has_event_handler (ngx_http_request_t *r, int response, const char *event_name);
+
+static int nodejs_server_dispatch_event (
+	ngx_http_request_t *r,
+	int response,
+	const char *event_name,
+	uint argc,
+	v8::Local<v8::Value> argv[]
+);
 
 std::vector<std::string> create_arg_vec (int argc, const char* const* argv) {
 	std::vector<std::string> vec;
@@ -172,6 +197,47 @@ static char* ngx_http_nodejs_merge_loc_conf (ngx_conf_t *cf, void *parent, void 
 	return NGX_CONF_OK;
 }
 
+static void ngx_http_nodejs_body_handler (ngx_http_request_t *r) {
+
+	ngx_http_nodejs_loc_conf_t *ncf = (ngx_http_nodejs_loc_conf_t*)
+		ngx_http_get_module_loc_conf(r, ngx_http_nodejs_module);
+
+	ngx_chain_t *cl = r->request_body->bufs;
+
+	v8::Locker locker(ncf->isolate);
+
+	v8::Isolate::Scope isolate_scope(ncf->isolate);
+	v8::HandleScope handle_scope(ncf->isolate);
+
+	v8::Local<v8::Context> context = v8::Local<v8::Context>::New(ncf->isolate, ncf->context);
+	v8::Context::Scope context_scope(context);
+
+	if (!cl) {
+		return;
+	}
+
+
+	while (cl) {
+		v8::Local<v8::Value> data = node::Buffer::New(
+			ncf->isolate, cl->buf->last - cl->buf->pos
+		).ToLocalChecked();
+
+		ngx_memcpy((u_char*) node::Buffer::Data(data), cl->buf->pos, cl->buf->last - cl->buf->pos);
+
+		// this pointer becomes managed by node, so we must create it outside nginx
+
+		v8::Local<v8::Value> argv[] = { data };
+
+		nodejs_server_dispatch_event(r, false, "data", 1, argv);
+
+		cl = cl->next;
+	}
+
+	nodejs_server_dispatch_event(r, false, "end", 0, {});
+
+}
+
+
 static ngx_int_t ngx_http_nodejs_handler (ngx_http_request_t *r) {
 	r->headers_out.content_type.len = sizeof("text/plain") - 1;
 	r->headers_out.content_type.data = (u_char *) "text/plain";
@@ -179,13 +245,28 @@ static ngx_int_t ngx_http_nodejs_handler (ngx_http_request_t *r) {
 	ngx_http_nodejs_loc_conf_t *ncf = (ngx_http_nodejs_loc_conf_t*)
 		ngx_http_get_module_loc_conf(r, ngx_http_nodejs_module);
 
-	r->headers_out.status = NGX_HTTP_OK;
+
+	// r->headers_out.status = NGX_HTTP_OK;
+	r->count++;
 
 	v8::String::Utf8Value result = run_v8_script(ncf, r);
-	r->count++;
+
+	printf("a\n");
+
+	if ((r->method & NGX_HTTP_GET) != NGX_HTTP_GET
+			&& nodejs_server_has_event_handler(r, false, "data")) {
+		printf("read body\n");
+		ngx_http_read_client_request_body(r, ngx_http_nodejs_body_handler);
+	} else {
+		printf("discard body\n");
+		ngx_http_discard_request_body(r);
+
+		nodejs_server_dispatch_event(r, false, "end", 0, {});
+	}
 
 	return NGX_OK;
 }
+
 
 static ngx_int_t ngx_http_nodejs_conf_read_token (ngx_conf_t *cf, ngx_http_nodejs_loc_conf_t *ncf) {
 	u_char      *start, ch;
@@ -366,7 +447,7 @@ static std::unique_ptr<node::CommonEnvironmentSetup> setup;
 
 static ngx_int_t ngx_http_nodejs_init (ngx_cycle_t *cycle) {
 	const int argc = 1;
-	const char* argv[] = {"node"};
+	const char *argv[] = {"node"};
 
 	std::vector<std::string> args(argv, argv + argc);
 
@@ -533,11 +614,49 @@ static v8::Local<v8::Object> get_http_client_request (
 		).ToLocalChecked()
 	).Check();
 
+	request_data_connection->Set(
+		context,
+		v8::String::NewFromUtf8(isolate, "remotePort").ToLocalChecked(),
+		v8::Number::New(
+			isolate,
+			htons(((sockaddr_in*) r->connection->sockaddr)->sin_port)
+		)
+	).Check();
+
+	request_data_connection->Set(
+		context,
+		v8::String::NewFromUtf8(isolate, "localPort").ToLocalChecked(),
+		v8::Number::New(
+			isolate,
+			htons(((sockaddr_in*) r->connection->listening->sockaddr)->sin_port)
+		)
+	).Check();
+
+	request_data_connection->Set(
+		context,
+		v8::String::NewFromUtf8(isolate, "encrypted").ToLocalChecked(),
+		v8::Boolean::New(
+			isolate,
+			#if (NGX_SSL)
+				r->connection->ssl != NULL
+			#else
+				0
+			#endif 
+		)
+	).Check();
+
 	request_data->Set(
 		context,
 		v8::String::NewFromUtf8(isolate, "connection").ToLocalChecked(),
 		request_data_connection
 	).Check();
+
+	request_data->Set(
+		context,
+		v8::String::NewFromUtf8(isolate, "_handlers").ToLocalChecked(),
+		v8::Object::New(isolate)
+	).Check();
+
 
 	v8::Local<v8::Object> headers = v8::Object::New(isolate);
 
@@ -585,7 +704,6 @@ static v8::Local<v8::Object> get_http_client_request (
 	).Check();
 
 	return request_data;
-
 }
 
 static ngx_http_request_t* get_request_from_nodejs (
@@ -625,6 +743,126 @@ static void* nodejs_server_response_status (const v8::FunctionCallbackInfo<v8::V
 	return (void*) &args;
 }
 
+static bool nodejs_server_has_event_handler (
+	ngx_http_request_t *r,
+	int response,
+	const char *event_name
+) {
+	ngx_http_nodejs_loc_conf_t *ncf = (ngx_http_nodejs_loc_conf_t*)
+		ngx_http_get_module_loc_conf(r, ngx_http_nodejs_module);
+
+	ngx_http_nodejs_ctx_t *ctx = (ngx_http_nodejs_ctx_t*)
+		ngx_http_get_module_ctx(r, ngx_http_nodejs_module);
+
+	if (ctx == NULL) {
+		return FALSE;
+	}
+
+	v8::Isolate *isolate = (v8::Isolate*) ncf->isolate;
+	v8::Locker locker(isolate);
+
+	v8::HandleScope handle_scope(isolate);
+	v8::Isolate::Scope isolate_scope(isolate);
+
+	v8::Local<v8::Context> context = v8::Local<v8::Context>::New(isolate, ncf->context);
+
+	v8::Context::Scope context_scope(context);
+
+	v8::Local<v8::Object> dispatchee = v8::Local<v8::Object>::New(isolate, response ? ctx->response_object : ctx->request_data);
+
+	v8::Local<v8::Value> handlers = dispatchee->Get(
+		context,
+		v8::String::NewFromUtf8(isolate, "_handlers").ToLocalChecked()
+	).ToLocalChecked();
+
+	if (!handlers->IsObject()) {
+		return FALSE;
+	}
+
+	v8::Local<v8::Value> listeners = handlers->ToObject(context).ToLocalChecked()->Get(
+		context,
+		v8::String::NewFromUtf8(isolate, event_name).ToLocalChecked()
+	).ToLocalChecked();
+
+	if (!listeners->IsArray()) {
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+static int nodejs_server_dispatch_event (
+	ngx_http_request_t *r,
+	int response,
+	const char *event_name,
+	uint argc,
+	v8::Local<v8::Value> argv[]
+) {
+	ngx_http_nodejs_loc_conf_t *ncf = (ngx_http_nodejs_loc_conf_t*)
+		ngx_http_get_module_loc_conf(r, ngx_http_nodejs_module);
+
+	ngx_http_nodejs_ctx_t *ctx = (ngx_http_nodejs_ctx_t*)
+		ngx_http_get_module_ctx(r, ngx_http_nodejs_module);
+
+	if (ctx == NULL) {
+		return -1;
+	}
+
+	v8::Isolate *isolate = (v8::Isolate*) ncf->isolate;
+	v8::Locker locker(isolate);
+
+	v8::HandleScope handle_scope(isolate);
+	v8::Isolate::Scope isolate_scope(isolate);
+
+	v8::Local<v8::Context> context = v8::Local<v8::Context>::New(isolate, ncf->context);
+	v8::Context::Scope context_scope(context);
+
+	v8::Local<v8::Object> dispatchee = v8::Local<v8::Object>::New(isolate, response ? ctx->response_object : ctx->request_data);
+
+	v8::Local<v8::Value> handlers = dispatchee->Get(
+		context,
+		v8::String::NewFromUtf8(isolate, "_handlers").ToLocalChecked()
+	).ToLocalChecked();
+
+	if (handlers.IsEmpty()) {
+		return 1;
+	}
+
+	if (!handlers->IsObject()) {
+		return 1;
+	}
+
+	v8::Local<v8::Value> listeners = handlers->ToObject(context).ToLocalChecked()->Get(
+		context,
+		v8::String::NewFromUtf8(isolate, event_name).ToLocalChecked()
+	).ToLocalChecked();
+
+	if (!listeners->IsArray()) {
+		return 1;
+	}
+
+	// ok, loop that array and node::MakeCallback 'em 
+	v8::Local<v8::Array> listeners_obj = v8::Local<v8::Array>::Cast(listeners);
+
+	uint array_length = listeners_obj->Length();
+
+	for (uint i = 0; i < array_length; i++) {
+		v8::Local<v8::Value> handler = listeners_obj->Get(context, i).ToLocalChecked();
+
+		if (handler.IsEmpty() || !handler->IsFunction())
+			continue;
+
+		v8::Local<v8::Value> result =
+			node::MakeCallback(isolate, context->Global(), v8::Local<v8::Function>::Cast(handler), argc, argv);
+
+		if (result.IsEmpty()) {
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
 static void* nodejs_server_response_next (const v8::FunctionCallbackInfo<v8::Value> &args) {
 	ngx_http_request_t *r = get_request_from_nodejs(args);
 
@@ -642,6 +880,10 @@ static void* nodejs_server_response_write_head (const v8::FunctionCallbackInfo<v
 	v8::Isolate *isolate = args.GetIsolate();
 
 	uint u = 0;
+
+	if (!r->headers_out.status) {
+		r->headers_out.status = NGX_HTTP_OK;
+	}
 
 	if (args.Length() && args[0]->Uint32Value(context).To(&u)) {
 		r->headers_out.status = u;
@@ -678,6 +920,7 @@ static void* nodejs_server_response_write (const v8::FunctionCallbackInfo<v8::Va
 	// force chunked encoding if we're calling .write
 	r->headers_out.content_length_n = -1;
 
+
 	if (!args.Length()) {
 		return (void*) &args;
 	}
@@ -689,6 +932,10 @@ static void* nodejs_server_response_write (const v8::FunctionCallbackInfo<v8::Va
 		args.This()->Get(context, headersSentSym).ToLocalChecked()->ToBoolean(isolate);
 
 	if (!headersSent->Value()) {
+		if (!r->headers_out.status) {
+			r->headers_out.status = NGX_HTTP_OK;
+		}
+
 		ngx_http_send_header(r);
 
 		args.This()->Set(context, headersSentSym, v8::Boolean::New(isolate, 1)).Check();
@@ -713,6 +960,8 @@ static void* nodejs_server_response_write (const v8::FunctionCallbackInfo<v8::Va
 		ngx_cpystrn(body, (u_char*) node::Buffer::Data(_data), size + 1);
 	}
 
+	printf("send chain %s %i ", body, size);
+
 	if (body != NULL) {
 		ngx_buf_t *b;
 		ngx_chain_t out;
@@ -735,6 +984,10 @@ static void* nodejs_server_response_write (const v8::FunctionCallbackInfo<v8::Va
 
 static void* nodejs_server_response_end (const v8::FunctionCallbackInfo<v8::Value> &args) {
 	ngx_http_request_t *r = get_request_from_nodejs(args);
+
+	if (!r->headers_out.status) {
+		r->headers_out.status = NGX_HTTP_OK;
+	}
 
 	v8::Local<v8::Context> context = args.GetIsolate()->GetCurrentContext();
 	v8::Isolate *isolate = args.GetIsolate();
@@ -806,6 +1059,11 @@ static void* nodejs_server_response_end (const v8::FunctionCallbackInfo<v8::Valu
 	return (void*) &args;
 }
 
+void ngx_str_set_n (ngx_str_t *str, u_char *a, u_int n) {
+	str->data = a;
+	str->len = n;
+}
+
 static void* nodejs_server_response_set_header (const v8::FunctionCallbackInfo<v8::Value>& args) {
 	v8::HandleScope scope(args.GetIsolate());
 
@@ -815,11 +1073,10 @@ static void* nodejs_server_response_set_header (const v8::FunctionCallbackInfo<v
 	std::string value_s = *v8::String::Utf8Value(args.GetIsolate(), args[1]);
 
 	// ok, we need ensure these strings will stay on the ngx heap 
-
-	u_char *header = (u_char*) ngx_pnalloc(r->pool, header_s.length() + 1);
+	u_char *header = (u_char*) ngx_pcalloc(r->main->pool, header_s.length() + 1);
 	ngx_cpystrn(header, (u_char*) header_s.c_str(), header_s.length() + 1);
 
-	u_char *value = (u_char*) ngx_pnalloc(r->pool, value_s.length() + 1);
+	u_char *value = (u_char*) ngx_pcalloc(r->main->pool, value_s.length() + 1);
 	ngx_cpystrn(value, (u_char*) value_s.c_str(), value_s.length() + 1);
 
 	if (strcasecmp((char*) header, "content-type") == 0) {
@@ -871,11 +1128,10 @@ static void* nodejs_server_response_set_header (const v8::FunctionCallbackInfo<v
 
 		ngx_table_elt_t* header_r = (ngx_table_elt_t*) ngx_list_push(&r->headers_out.headers);
 
-		header_r->key.data = header;
-		header_r->key.len = strlen((char*) header);
+		header_r->hash = 1;
 
-		header_r->value.data = value;
-		header_r->value.len = strlen((char*) value);
+		ngx_str_set_n(&header_r->key, header, header_s.length() + 1);
+		ngx_str_set_n(&header_r->value, value, value_s.length() + 1);
 
 	}
 
@@ -1015,6 +1271,13 @@ static int schedule_event_loop (ngx_http_request_t *r) {
 	return 0;
 }
 
+static void nodejs_release_context (void *data) {
+	ngx_http_nodejs_ctx_t *ctx = (ngx_http_nodejs_ctx_t*) data;
+
+	ctx->request_data.SetWeak();
+	ctx->response_object.SetWeak();
+}
+
 static v8::String::Utf8Value run_v8_script (
 	ngx_http_nodejs_loc_conf_t *ncf,
 	ngx_http_request_t *r
@@ -1024,6 +1287,29 @@ static v8::String::Utf8Value run_v8_script (
 	}
 
 	v8::Isolate *isolate = (v8::Isolate*) ncf->isolate;
+
+	ngx_http_nodejs_ctx_t *ctx = (ngx_http_nodejs_ctx_t*)
+		ngx_http_get_module_ctx(r, ngx_http_nodejs_module);
+
+	if (ctx == NULL) {
+		ngx_pool_cleanup_t *clean = (ngx_pool_cleanup_t*) 
+			ngx_pool_cleanup_add(r->connection->pool, sizeof(ngx_http_nodejs_module));
+
+		ngx_memset(clean->data, 0, sizeof(ngx_http_nodejs_module));
+
+		clean->handler = nodejs_release_context;
+
+		ctx = (ngx_http_nodejs_ctx_t*) clean->data;
+
+		if (ctx == NULL) {
+			v8::HandleScope handle_scope(isolate);
+
+			return v8::String::Utf8Value(isolate, v8::String::NewFromUtf8(isolate, "").ToLocalChecked());
+		}
+
+		ngx_http_set_ctx(r, ctx, ngx_http_nodejs_module);
+	}
+
 
 	isolate->SetMicrotasksPolicy(v8::MicrotasksPolicy::kAuto);
 
@@ -1039,6 +1325,9 @@ static v8::String::Utf8Value run_v8_script (
 
 	v8::Local<v8::Object> request_data = get_http_client_request(ncf, r, context);
 	v8::Local<v8::Object> response_object = get_http_server_response(ncf, r, context);
+
+	ctx->request_data = v8::Persistent<v8::Object, v8::CopyablePersistentTraits<v8::Object>>(isolate, request_data);
+	ctx->response_object = v8::Persistent<v8::Object, v8::CopyablePersistentTraits<v8::Object>>(isolate, response_object);
 
 	v8::Local<v8::Value> argv[] = { request_data, response_object };
 
